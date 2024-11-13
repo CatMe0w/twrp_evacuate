@@ -579,8 +579,8 @@ fn cleanup_temp_dir() -> std::io::Result<()> {
     let tar_dir = format!("{}/{}", DESTINATION_DIR, DECOMPRESSED_TAR_DIR);
     let apk_temp_dir = format!("{}/{}", DESTINATION_DIR, APK_TEMP_DIR);
     if Path::new(&tar_dir).exists() {
-        fs::remove_dir_all(tar_dir)?;
-        fs::remove_dir_all(apk_temp_dir)?;
+        let _ = fs::remove_dir_all(tar_dir);
+        let _ = fs::remove_dir_all(apk_temp_dir);
     }
     Ok(())
 }
