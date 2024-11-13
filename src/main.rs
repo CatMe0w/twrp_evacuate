@@ -509,7 +509,7 @@ fn main() -> Result<(), io::Error> {
             .unwrap(),
     );
     bar_twrp_files.enable_steady_tick(time::Duration::from_millis(100));
-    bar_twrp_files.set_message(format!("Finding users"));
+    bar_twrp_files.set_message("Finding users");
 
     let mut user_ids = tar_files
         .iter()
