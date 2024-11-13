@@ -1,7 +1,5 @@
 use chrono::{DateTime, Local};
 use flate2::read::DeflateDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -14,6 +12,7 @@ use std::{
     time::{self, SystemTime},
 };
 use tar::{Archive, Header};
+use walkdir::WalkDir;
 
 const DESTINATION_DIR: &str = "twrp_evacuate_migrated";
 const DECOMPRESSED_TAR_DIR: &str = "decompressed_temp";
@@ -39,6 +38,7 @@ struct NeoBackupProperties {
     has_apk: bool,
     has_app_data: bool,
     has_devices_protected_data: bool,
+    compression_type: String,
     cpu_arch: String,
     size: i64,
 }
@@ -258,16 +258,6 @@ fn find_all_app_data(
     Ok(package_names)
 }
 
-fn is_tar_empty(tar_path: &PathBuf) -> Result<bool, io::Error> {
-    let file = File::open(tar_path)?;
-    let mut archive = Archive::new(file);
-
-    Ok(archive
-        .entries()?
-        .filter_map(|entry| entry.ok())
-        .all(|entry| entry.header().entry_type() != tar::EntryType::Regular))
-}
-
 fn extract_app_data(
     tar_path: &PathBuf,
     user_id: UserId,
@@ -289,11 +279,17 @@ fn extract_app_data(
     let data_path = format!("{}/{}", base_path, package_name);
     let dest_dir = format!("{}/{}/{}", DESTINATION_DIR, user_id, package_name);
 
+    let win_tar_file_name = tar_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     let dest_tar_path = match is_de_data {
-        true => format!("{}/device_protected_files.tar", dest_dir),
-        false => format!("{}/data.tar", dest_dir),
+        true => format!(
+            "{}/{}-device_protected_files.tar",
+            dest_dir, win_tar_file_name
+        ),
+        false => format!("{}/{}-data.tar", dest_dir, win_tar_file_name),
     };
-    let dest_gz_path = format!("{}.gz", dest_tar_path);
 
     fs::create_dir_all(&dest_dir)?;
     let dest_tar_file = File::create(&dest_tar_path)?;
@@ -344,19 +340,6 @@ fn extract_app_data(
         })?;
 
     dest_tar.finish()?;
-
-    if is_tar_empty(&dest_tar_path.clone().into())? {
-        fs::remove_file(dest_tar_path)?;
-    } else {
-        let tar_file = File::open(&dest_tar_path)?;
-        let gz_file = File::create(&dest_gz_path)?;
-
-        let mut encoder = GzEncoder::new(gz_file, Compression::default());
-        io::copy(&mut tar_file.take(u64::MAX), &mut encoder)?;
-        encoder.finish()?;
-
-        fs::remove_file(dest_tar_path)?;
-    }
 
     Ok(())
 }
@@ -410,9 +393,9 @@ fn make_neo_backup_properties(
     let app_dir = format!("{}/{}/{}", DESTINATION_DIR, user_id, package_name);
 
     let has_apk = Path::new(&app_dir).join("base.apk").exists();
-    let has_app_data = Path::new(&app_dir).join("data.tar.gz").exists();
+    let has_app_data = Path::new(&app_dir).join("data.tar.zst").exists();
     let has_devices_protected_data = Path::new(&app_dir)
-        .join("device_protected_files.tar.gz")
+        .join("device_protected_files.tar.zst")
         .exists();
 
     let datetime: DateTime<Local> = DateTime::from(backup_time);
@@ -428,6 +411,7 @@ fn make_neo_backup_properties(
         has_apk,
         has_app_data,
         has_devices_protected_data,
+        compression_type: "zst".to_string(),
         cpu_arch: "arm64-v8a".to_string(), // TODO: get this from the extracted APK; at this moment i assume you don't use TWRP/NeoBackup on x86 devices/emulators!
         size: 0,
     };
@@ -439,6 +423,124 @@ fn make_neo_backup_properties(
         name: filename,
         content: properties,
     })
+}
+
+fn is_tar_empty(tar_path: &Path) -> Result<bool, io::Error> {
+    let file = File::open(tar_path)?;
+    let mut archive = Archive::new(file);
+
+    Ok(archive
+        .entries()?
+        .filter_map(|entry| entry.ok())
+        .all(|entry| entry.header().entry_type() != tar::EntryType::Regular))
+}
+
+fn merge_tar_files(tar_files: Vec<PathBuf>, output_path: &Path) -> Result<(), io::Error> {
+    let output_file = File::create(output_path)?;
+    let mut output_tar = tar::Builder::new(output_file);
+
+    tar_files
+        .into_iter()
+        .try_for_each(|tar_path| -> Result<(), io::Error> {
+            let file = File::open(&tar_path)?;
+            let mut archive = Archive::new(file);
+
+            archive
+                .entries()?
+                .filter_map(|entry| entry.ok())
+                .try_for_each(|mut entry| -> Result<(), io::Error> {
+                    let mut header = entry.header().clone();
+                    let path = entry.path()?.to_path_buf();
+                    let mut data = Vec::new();
+                    entry.read_to_end(&mut data)?;
+                    output_tar.append_data(&mut header, path, &data[..])?;
+                    Ok(())
+                })?;
+
+            fs::remove_file(tar_path)?;
+            Ok(())
+        })?;
+
+    output_tar.finish()?;
+    Ok(())
+}
+
+fn compress_migrated_tar_files(user_id: i32) -> Result<(), io::Error> {
+    let user_dir = format!("{}/{}", DESTINATION_DIR, user_id);
+    let user_path = Path::new(&user_dir);
+
+    fs::read_dir(user_path)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .par_bridge()
+        .try_for_each(|entry| {
+            let app_dir = entry.path();
+
+            let tar_files: Vec<_> = WalkDir::new(&app_dir)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.path().is_file()
+                        && entry.path().extension().and_then(|ext| ext.to_str()) == Some("tar")
+                })
+                .collect();
+
+            // merge data.tar
+            let data_tar_files: Vec<_> = tar_files
+                .iter()
+                .filter(|entry| entry.path().to_str().unwrap().ends_with("-data.tar"))
+                .map(|entry| entry.path().to_path_buf())
+                .collect();
+
+            if !data_tar_files.is_empty() {
+                let output_path = app_dir.join("data.tar");
+                merge_tar_files(data_tar_files, &output_path).unwrap();
+            }
+
+            // merge device_protected_files.tar
+            let device_protected_files_tar_files: Vec<_> = tar_files
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .to_str()
+                        .unwrap()
+                        .ends_with("-device_protected_files.tar")
+                })
+                .map(|entry| entry.path().to_path_buf())
+                .collect();
+
+            if !device_protected_files_tar_files.is_empty() {
+                let output_path = app_dir.join("device_protected_files.tar");
+                merge_tar_files(device_protected_files_tar_files, &output_path).unwrap();
+            }
+
+            // delete empty tar files
+            tar_files
+                .iter()
+                .filter(|entry| is_tar_empty(entry.path()).unwrap_or(false))
+                .for_each(|entry| {
+                    let _ = fs::remove_file(entry.path());
+                });
+
+            // compress data.tar and device_protected_files.tar
+            ["data.tar", "device_protected_files.tar"]
+                .par_iter()
+                .map(|file_name| app_dir.join(file_name))
+                .filter(|tar_path| tar_path.exists())
+                .try_for_each(|tar_path| {
+                    let zst_path = tar_path.with_extension("tar.zst");
+
+                    let tar_file = File::open(&tar_path)?;
+                    let mut zst_file = File::create(&zst_path)?;
+                    let encoder = zstd::encode_all(tar_file, 0)?;
+                    zst_file.write_all(&encoder)?;
+
+                    fs::remove_file(tar_path)?;
+
+                    Ok(())
+                })
+        })
 }
 
 fn assemble_neo_backup_file_structure(
