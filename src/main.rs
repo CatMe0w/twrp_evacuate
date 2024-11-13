@@ -228,7 +228,10 @@ fn find_all_app_data(
         0 => 4,
         _ => 5,
     };
-    let path_depth = if is_device_protected_data { 5 } else { path_depth };
+    let path_depth = match is_device_protected_data {
+        true => 5,
+        false => path_depth,
+    };
 
     let mut package_names: Vec<String> = archive
         .entries()?
