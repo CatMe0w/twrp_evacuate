@@ -425,6 +425,17 @@ fn make_neo_backup_properties(
     })
 }
 
+fn find_tar_files(tar_dir: &Path) -> Vec<walkdir::DirEntry> {
+    WalkDir::new(&tar_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.path().is_file()
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("tar")
+        })
+        .collect()
+}
+
 fn is_tar_empty(tar_path: &Path) -> Result<bool, io::Error> {
     let file = File::open(tar_path)?;
     let mut archive = Archive::new(file);
@@ -476,14 +487,18 @@ fn compress_migrated_tar_files(user_id: i32) -> Result<(), io::Error> {
         .try_for_each(|entry| {
             let app_dir = entry.path();
 
-            let tar_files: Vec<_> = WalkDir::new(&app_dir)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry.path().is_file()
-                        && entry.path().extension().and_then(|ext| ext.to_str()) == Some("tar")
-                })
-                .collect();
+            let tar_files: Vec<_> = find_tar_files(&app_dir);
+
+            // delete empty tar files
+            tar_files
+                .iter()
+                .filter(|tar_file| is_tar_empty(tar_file.path()).unwrap_or(false))
+                .try_for_each(|tar_file| -> Result<(), io::Error> {
+                    fs::remove_file(tar_file.path())?;
+                    Ok(())
+                })?;
+
+            let tar_files: Vec<_> = find_tar_files(&app_dir);
 
             // merge data.tar
             let data_tar_files: Vec<_> = tar_files
@@ -514,14 +529,6 @@ fn compress_migrated_tar_files(user_id: i32) -> Result<(), io::Error> {
                 let output_path = app_dir.join("device_protected_files.tar");
                 merge_tar_files(device_protected_files_tar_files, &output_path).unwrap();
             }
-
-            // delete empty tar files
-            tar_files
-                .iter()
-                .filter(|entry| is_tar_empty(entry.path()).unwrap_or(false))
-                .for_each(|entry| {
-                    let _ = fs::remove_file(entry.path());
-                });
 
             // compress data.tar and device_protected_files.tar
             ["data.tar", "device_protected_files.tar"]
