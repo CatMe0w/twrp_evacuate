@@ -482,12 +482,11 @@ fn main() -> Result<(), io::Error> {
     let win_files = find_all_win_files(first_win_path)?;
 
     let m = MultiProgress::new();
+    let style = ProgressStyle::default_bar()
+        .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
+        .unwrap();
     let bar_decompress = m.add(ProgressBar::new(win_files.len() as u64));
-    bar_decompress.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-            .unwrap(),
-    );
+    bar_decompress.set_style(style.clone());
     bar_decompress.enable_steady_tick(time::Duration::from_millis(100));
     bar_decompress.set_message("Decompressing TWRP backup file(s)");
 
@@ -503,11 +502,7 @@ fn main() -> Result<(), io::Error> {
 
     let tar_file_count = tar_files.len();
     let bar_twrp_files = m.add(ProgressBar::new(tar_file_count as u64));
-    bar_twrp_files.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-            .unwrap(),
-    );
+    bar_twrp_files.set_style(style.clone());
     bar_twrp_files.enable_steady_tick(time::Duration::from_millis(100));
     bar_twrp_files.set_message("Finding users");
 
@@ -527,11 +522,7 @@ fn main() -> Result<(), io::Error> {
 
         let apk_fs_items = find_all_apks(&tar_file)?;
         let bar_apk = m.add(ProgressBar::new(apk_fs_items.len() as u64));
-        bar_apk.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-                .unwrap(),
-        );
+        bar_apk.set_style(style.clone());
         bar_apk.enable_steady_tick(time::Duration::from_millis(100));
         bar_apk.set_message(format!("Found {} APK(s)", apk_fs_items.len()));
 
@@ -546,11 +537,7 @@ fn main() -> Result<(), io::Error> {
         bar_apk.finish_and_clear();
 
         let bar_users = m.add(ProgressBar::new(user_ids.len() as u64));
-        bar_users.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-                .unwrap(),
-        );
+        bar_users.set_style(style.clone());
         bar_users.enable_steady_tick(time::Duration::from_millis(100));
 
         for user_id in user_ids.clone() {
@@ -560,29 +547,22 @@ fn main() -> Result<(), io::Error> {
             let app_data = find_all_app_data(&tar_file, user_id, false)?;
 
             let bar_data = m.add(ProgressBar::new(app_data.len() as u64));
-            bar_data.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-                    .unwrap(),
-            );
+            bar_data.set_style(style.clone());
             bar_data.enable_steady_tick(time::Duration::from_millis(100));
 
             for package_name in app_data {
                 bar_data.set_message(format!("Extracting app data: {}", package_name));
-                extract_app_data(&tar_file, user_id, &package_name, false)?;
                 bar_data.inc(1);
+                extract_app_data(&tar_file, user_id, &package_name, false)?;
             }
 
             bar_data.finish_and_clear();
 
             let app_device_protected_data = find_all_app_data(&tar_file, user_id, true)?;
 
-            let bar_device_protected_data = m.add(ProgressBar::new(app_device_protected_data.len() as u64));
-            bar_device_protected_data.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} {bar:20.cyan/blue} {pos}/{len} {msg}")
-                    .unwrap(),
-            );
+            let bar_device_protected_data =
+                m.add(ProgressBar::new(app_device_protected_data.len() as u64));
+            bar_device_protected_data.set_style(style.clone());
             bar_device_protected_data.enable_steady_tick(time::Duration::from_millis(100));
 
             for package_name in app_device_protected_data {
@@ -590,8 +570,8 @@ fn main() -> Result<(), io::Error> {
                     "Extracting app device protected data: {}",
                     package_name
                 ));
-                extract_app_data(&tar_file, user_id, &package_name, true)?;
                 bar_device_protected_data.inc(1);
+                extract_app_data(&tar_file, user_id, &package_name, true)?;
             }
             bar_device_protected_data.finish_and_clear();
         }
