@@ -696,7 +696,15 @@ fn main() -> Result<(), io::Error> {
     }
     bar_twrp_files.finish_and_clear();
 
+    let bar_assemble = m.add(ProgressBar::new(user_ids.len() as u64));
+    bar_assemble.set_style(style.clone());
+    bar_assemble.enable_steady_tick(time::Duration::from_millis(100));
+
     for user_id in user_ids {
+        bar_assemble.set_message("Assembling Neo Backup file structure");
+        bar_assemble.inc(1);
+
+        compress_migrated_tar_files(user_id)?;
         let extracted_apps = find_all_extracted_apps(user_id)?;
         for package_name in extracted_apps {
             move_apks_to_destination(user_id, &package_name)?;
@@ -704,6 +712,7 @@ fn main() -> Result<(), io::Error> {
             assemble_neo_backup_file_structure(user_id, &package_name, properties_file)?;
         }
     }
+    bar_assemble.finish_and_clear();
 
     cleanup_temp_dir()?;
 
