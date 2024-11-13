@@ -3,6 +3,7 @@ use flate2::read::DeflateDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -502,7 +503,7 @@ fn main() -> Result<(), io::Error> {
     bar_decompress.set_message("Decompressing TWRP backup file(s)");
 
     let tar_files = win_files
-        .iter()
+        .par_iter()
         .map(|win_file| {
             let result = decompress_win_file(win_file);
             bar_decompress.inc(1);
