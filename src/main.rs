@@ -22,7 +22,7 @@ const APK_TEMP_DIR: &str = "apk_temp";
 // root_dir_name: "~~YUW09CEoPo_qnb20Rnmw2Q=="
 // instance_dir_name: "com.machiav3lli.backup-DqFd2HhZgfqT9Ep65qCtZQ=="
 struct ApkFsItem {
-    root_dir_name: String,
+    root_dir_name: Option<String>,
     instance_dir_name: String,
 }
 
@@ -130,15 +130,20 @@ fn find_all_apks(tar_path: &PathBuf) -> Result<Vec<ApkFsItem>, io::Error> {
                 })
         })
         .filter_map(|path_str| {
-            path_str.split('/').nth(3).and_then(|root_dir_name| {
-                path_str
-                    .split('/')
-                    .nth(4)
-                    .map(|instance_dir_name| ApkFsItem {
-                        root_dir_name: root_dir_name.to_string(),
-                        instance_dir_name: instance_dir_name.to_string(),
-                    })
-            })
+            let mut parts = path_str.split('/');
+            let root_dir_name = parts.nth(3);
+            let instance_dir_name = parts.next();
+
+            match instance_dir_name?.ends_with(".apk") {
+                true => Some(ApkFsItem {
+                    root_dir_name: None,
+                    instance_dir_name: root_dir_name?.to_string(),
+                }),
+                false => Some(ApkFsItem {
+                    root_dir_name: root_dir_name.map(String::from),
+                    instance_dir_name: instance_dir_name?.to_string(),
+                }),
+            }
         })
         .collect();
 
@@ -155,7 +160,10 @@ fn extract_apks_to_temp(tar_path: &PathBuf, apk: &ApkFsItem) -> Result<(), io::E
         .next()
         .unwrap_or("")
         .to_string();
-    let apk_dir_path = format!("/data/app/{}/{}", apk.root_dir_name, apk.instance_dir_name);
+    let apk_dir_path = match &apk.root_dir_name {
+        Some(root_dir_name) => format!("/data/app/{}/{}", root_dir_name, apk.instance_dir_name),
+        None => format!("/data/app/{}", apk.instance_dir_name),
+    };
     let dest_dir = format!("{}/{}/{}", DESTINATION_DIR, APK_TEMP_DIR, package_name);
 
     fs::create_dir_all(&dest_dir)?;
@@ -529,7 +537,10 @@ fn main() -> Result<(), io::Error> {
         for apk_fs_item in apk_fs_items {
             bar_apk.set_message(format!(
                 "Extracting APK: {}",
-                apk_fs_item.instance_dir_name.split('-').next().unwrap()
+                match apk_fs_item.root_dir_name {
+                    Some(ref root_dir_name) => root_dir_name,
+                    None => apk_fs_item.instance_dir_name.split('-').next().unwrap(),
+                }
             ));
             extract_apks_to_temp(&tar_file, &apk_fs_item)?;
             bar_apk.inc(1);
